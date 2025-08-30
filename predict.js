@@ -27,31 +27,28 @@ function getHashFromArray(...values) {
     return H.update(array.buffer).digest().toNumber();
 }
 
-
-
 var save = {
     daysPlayed: 1,
-    gameID: 5,
+    gameID: 0,
     year: 1,
     seasonNames: ['Spring', 'Summer', 'Fall', 'Winter'],
     useLegacyRandom: false
-}
+};
 
-class Weather {
+// Day represents the stardew valley day and contains weather and event info
+class Day {
     day;
     weatherTown;
-}
+    event;
+};
 
-class WeatherPrediction {
-    weathers = [];
-}
+// Month will contain an array of 28 Day objects
+class Month {
+    days = [];
+};
 
-function predictGreenRain(isSearch, offset) {
-    // Green Rain Day determined by StardewValley.Utility.getDayOfGreenRainThisSummer()
-    // Some weather effects determined by Data/LocationContexts
-    // Overrides in StardewValley.GameData.getWeatherModificationsForDate()
-    var output = "",
-        grDays = [ 5, 6, 7, 14, 15, 16, 18, 23 ],
+function predictGreenRainForDay(day) {
+    var grDays = [5, 6, 7, 14, 15, 16, 18, 23],
         festivalDays = {
             13: "Egg Festival",
             24: "Flower Dance",
@@ -70,176 +67,243 @@ function predictGreenRain(isSearch, offset) {
             109: "Winter Star"
         },
         year,
-        rng,
-        tclass;
+        rng;
 
-    if (typeof(offset) === 'undefined') {
-        offset = 28 * Math.floor(save.daysPlayed/28);
-    }
+    offset = 28 * Math.floor(save.daysPlayed / 28);
+
 
     var month = Math.floor(offset / 28);
     var season = month % 4;
-    var monthName = save.seasonNames[season];
     var year = 1 + Math.floor(offset / 112);
     var rng = new CSRandom(getRandomSeed(year * 777, save.gameID));
     var greenRainDay = grDays[rng.Next(grDays.length)];
 
-    var prediction = new WeatherPrediction();
 
-    for (var week = 0; week < 4; week++) {
-        for (var weekDay = 1; weekDay < 8; weekDay++) {
-            var day = 7 * week + weekDay + offset;
-            var weatherTown = 'Sun';
-            if (day == 1 || day == 2 || day == 4 || (day % 28) == 1) {
-                weatherTown = 'Sun';
-            } else if (day == 3) {
-                weatherTown = 'Rain';
-            } else if (festivalDays.hasOwnProperty(day % 112)) {
-                weatherTown = festivalDays[day % 112];
-            } else {
-                switch(season) {
-                    case 0:
-                    case 2:
-                        rng = new CSRandom(getRandomSeed(getHashFromString("location_weather"), save.gameID, day-1));
-                        output += "Seed: " + getHashFromString("location_weather") + " ";
-                       var num = rng.NextDouble()
-							output += num;
-							if (num < 0.183) {
-                            weatherTown = 'Rain';
-                        }
-                        break;
-                    case 1:
-                        // The -28 is because we are only using this for summer
-                        var dayOfMonth = (day % 112) - 28;
-                        rng = new CSRandom(getRandomSeed(day-1, save.gameID/2, getHashFromString("summer_rain_chance")));
-                        if (dayOfMonth == greenRainDay) {
-                            weatherTown = 'Green Rain';
-                        } else if (dayOfMonth % 13 == 0) {
-                            weatherTown = 'Storm';
-                        } else {
-                            var rainChance = 0.12 + 0.003*(dayOfMonth-1);
-                            if (rng.NextDouble() < rainChance) {
-                                weatherTown = 'Rain';
-                            }
-                        }
-                        break;
-                }
-            }
-            var weather = new Weather();
-            weather.day = day;
-            weather.weatherTown = weatherTown;
-
-            prediction.weathers.push(weather);
-        }
-    }
-
-    return prediction;
-}
-
-// Loop through possible game IDs to find the id that results in the most rain days
-/* var bestID = 0;
-var mostDays = 0;
-
-for (var gameID = 1; gameID < 99999999; gameID++) {
-    save.gameID = gameID;
-    var prediction = predictGreenRain(false, 0);
-    var rainDays = 0;
-    for (var i = 0; i < prediction.weathers.length; i++) {
-        if (prediction.weathers[i].weatherTown == 'Rain' || prediction.weathers[i].weatherTown == 'Green Rain' || prediction.weathers[i].weatherTown == 'Storm') {
-            rainDays++;
-        }
-    }
-    if (rainDays > mostDays) {
-        mostDays = rainDays;
-        bestID = gameID;
-        console.log("New Best Game ID: " + bestID + " with " + mostDays + " rain days");
-    }
-    //console.log("Game ID: " + gameID + " Rain Days: " + rainDays);
-}
-console.log("Best Game ID: " + bestID);
-
-save.gameID = bestID;
-var prediction = predictGreenRain(false, 0);
-console.log(prediction); */
-
-// Now Try running the same scan but with multiple threads to speed it up, search different ranges with different threads
-if (typeof(window) === 'undefined' && typeof(importScripts) === 'undefined') {
-    // Node.js environment
-    const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
-
-    if (isMainThread) {
-        // Main thread
-        const numThreads = 6; // Adjust based on your CPU cores
-        const rangePerThread = Math.floor(999999999 / numThreads);
-        let completedThreads = 0;
-        let globalBestID = 0;
-        let globalMostDays = 0;
-
-        for (let i = 0; i < numThreads; i++) {
-            const startID = i * rangePerThread + 1;
-            const endID = (i === numThreads - 1) ? 999999999 : (i + 1) * rangePerThread;
-
-            const worker = new Worker(__filename, { workerData: { startID, endID } });
-            worker.on('message', (message) => {
-                if (message.mostDays > globalMostDays) {
-                    globalMostDays = message.mostDays;
-                    globalBestID = message.bestID;
-                    console.log(`New Global Best Game ID: ${globalBestID} with ${globalMostDays} rain days`);
-                }
-            });
-            worker.on('exit', () => {
-                completedThreads++;
-                if (completedThreads === numThreads) {
-                    console.log(`Final Best Game ID: ${globalBestID} with ${globalMostDays} rain days`);
-                }
-            });
-        }
+    var weatherTown = 'Sun';
+    if (day == 1 || day == 2 || day == 4 || (day % 28) == 1) {
+        weatherTown = 'Sun';
+    } else if (day == 3) {
+        weatherTown = 'Rain';
+    } else if (festivalDays.hasOwnProperty(day % 112)) {
+        weatherTown = festivalDays[day % 112];
     } else {
-        // Worker thread
-        const { startID, endID } = workerData;
-        let bestID = 0;
-        let mostDays = 0;
+        switch (season) {
+            case 0:
+            case 2:
+                rng = new CSRandom(getRandomSeed(getHashFromString("location_weather"), save.gameID, day - 1));
+                var num = rng.NextDouble()
+                if (num < 0.183) {
+                    weatherTown = 'Rain';
+                }
+                break;
+            case 1:
+                // The -28 is because we are only using this for summer
+                var dayOfMonth = (day % 112) - 28;
+                rng = new CSRandom(getRandomSeed(day - 1, save.gameID / 2, getHashFromString("summer_rain_chance")));
+                if (dayOfMonth == greenRainDay) {
+                    weatherTown = 'Green Rain';
+                } else if (dayOfMonth % 13 == 0) {
+                    weatherTown = 'Storm';
+                } else {
+                    var rainChance = 0.12 + 0.003 * (dayOfMonth - 1);
+                    if (rng.NextDouble() < rainChance) {
+                        weatherTown = 'Rain';
+                    }
+                }
+                break;
+        }
+    }
 
-        for (let gameID = startID; gameID <= endID; gameID++) {
-            save.gameID = gameID;
-            var prediction = predictGreenRain(false, 0);
-            var rainDays = 0;
-            for (var i = 0; i < prediction.weathers.length; i++) {
-                if (prediction.weathers[i].weatherTown == 'Rain' || prediction.weathers[i].weatherTown == 'Green Rain' || prediction.weathers[i].weatherTown == 'Storm') {
-                    rainDays++;
+    return weatherTown;
+}
+
+function predictEventForDay(day) {
+    // logic from StardewValley.Utility.pickFarmEvent()
+    var thisEvent,
+        day,
+        monthName,
+        month,
+        year,
+        rng;
+
+    month = Math.floor(offset / 28);
+    monthName = save.seasonNames[month % 4];
+    year = 1 + Math.floor(offset / 112);
+
+    var couldBeWindstorm = false;
+    // The event is actually rolled in the morning at 6am, but from a user standpoint it makes more sense
+    // to think of it occuring during the previous night. We will offset the day by 1 because of this.
+    if (day === 30) {
+        thisEvent = '<img src="blank.png" class="event" id="train"><br/>Earthquake';
+    } else {
+        rng = new CSRandom(getRandomSeed(day + 1, save.gameID / 2));
+        for (var i = 0; i < 10; i++) {
+            rng.NextDouble();
+        }
+        // If the greenhouse has been repaired, an extra roll for the windstorm needs to happen; because of the
+        // order of conditionals, this roll continues to happen even after the tree has fallen.
+        if (save.greenhouseUnlocked) {
+            couldBeWindstorm = rng.NextDouble() < 0.1;
+        }
+        // We still would like to check for possible windstorm in saves that don't yet have a greenhouse and in that
+        // case we need to reuse the next event roll as the windstorm check.
+        var nextRoll = rng.NextDouble();
+        if (!save.greenhouseUnlocked) {
+            couldBeWindstorm = nextRoll < 0.1;
+        }
+        // Fairy event chance +.007 if there is a full-grown fairy rose on the farm, but that is too volatile for us.
+        if (nextRoll < 0.01 && (month % 4) < 3) {
+            thisEvent = 'Fairy';
+        } else if (rng.NextDouble() < 0.01 && (day + 1) > 20) {
+            thisEvent = 'Witch';
+        } else if (rng.NextDouble() < 0.01 && (day + 1) > 5) {
+            thisEvent = 'Meteor';
+        } else if (rng.NextDouble() < 0.005) {
+            thisEvent = 'Stone Owl';
+        } else if (rng.NextDouble() < 0.008 && year > 1) {
+            thisEvent = 'Strange Capsule';
+        } else {
+            thisEvent = '(No event)';
+        }
+    }
+
+
+    return thisEvent;
+};
+
+
+
+/* var searchCandidates = [];
+var bestRainyDays = 0;
+var bestRainyID = 0;
+
+for (id = 999999999; id >= 0; id -= 1) {
+    save.gameID = id;
+    var month = new Month();
+    for (var day = 1; day <= 28; day++) {
+        var currentDay = new Day();
+
+        var weather = predictGreenRainForDay(day);
+        var event = predictEventForDay(day);
+        currentDay.day = day;
+        currentDay.weatherTown = weather;
+        currentDay.event = event;
+        month.days.push(currentDay);
+    }
+    // Count the number of rainy days in the month
+    var rainyDays = month.days.filter(d => d.weatherTown === 'Rain' || d.weatherTown === 'Green Rain' || d.weatherTown === 'Storm').length;
+
+    if (rainyDays > bestRainyDays) {
+        bestRainyDays = rainyDays;
+        bestRainyID = id;
+        console.log("New best: " + bestRainyDays + " rainy days with ID " + bestRainyID);
+    }
+
+    if (rainyDays >= 16) {
+        // Check for at least 2 Fairy events
+        for (var i = 0; i < month.days.length; i++) {
+            month.days[i].event = predictEventForDay(month.days[i].day);
+        }
+        var fairyDays = month.days.filter(d => d.event === 'Fairy').length;
+        console.log(fairyDays)
+        if (fairyDays >= 2) {
+            searchCandidates.push({ id: id, rainyDays: rainyDays, fairyDays: fairyDays, month: month });
+            console.log("Found candidate ID " + id + " with " + rainyDays + " rainy days and " + fairyDays + " Fairy events.");
+        }
+    }
+}  */
+
+// Refactor loop as worker threads to speed up search
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+
+if (isMainThread) {
+
+    var searchCandidates = [];
+    var bestRainyDays = 0;
+    var bestRainyID = 0;
+    var numWorkers = 12;
+    var rangePerWorker = Math.floor(1000000000 / numWorkers);
+    var completedWorkers = 0;
+
+    console.log("Starting search with " + numWorkers + " workers...");
+
+    for (var w = 0; w < numWorkers; w++) {
+        let startID = 999999999 - w * rangePerWorker;
+        let endID = startID - rangePerWorker + 1;
+        if (w === numWorkers - 1) {
+            endID = 0; // Ensure last worker goes to 0
+        }
+        const worker = new Worker(__filename, { workerData: { startID: startID, endID: endID, save: save } });
+        worker.on('message', (msg) => {
+            if (msg.type === 'candidate') {
+                searchCandidates.push(msg.data);
+                console.log("Found candidate ID " + msg.data.id + " with " + msg.data.rainyDays + " rainy days and " + msg.data.fairyDays + " Fairy events.");
+            } else if (msg.type === 'best') {
+                if (msg.data.rainyDays > bestRainyDays) {
+                    bestRainyDays = msg.data.rainyDays;
+                    bestRainyID = msg.data.id;
+                    console.log("New best: " + bestRainyDays + " rainy days with ID " + bestRainyID);
+                }
+            } else if (msg.type === 'done') {
+                completedWorkers++;
+                console.log("Worker completed. " + completedWorkers + "/" + numWorkers + " done.");
+                if (completedWorkers === numWorkers) {
+                    console.log("All workers complete.");
+                    console.log("Best ID found: " + bestRainyID + " with " + bestRainyDays + " rainy days.");
+                    console.log("Total candidates found: " + searchCandidates.length);
+                    for (var c = 0; c < searchCandidates.length; c++) {
+                        console.log("Candidate ID " + searchCandidates[c].id + ": " + searchCandidates[c].rainyDays + " rainy days, " + searchCandidates[c].fairyDays + " Fairy events.");
+                        for (var d = 0; d < searchCandidates[c].month.days.length; d++) {
+                            console.log("  Day " + searchCandidates[c].month.days[d].day + ": " + searchCandidates[c].month.days[d].weatherTown + ", " + searchCandidates[c].month.days[d].event);
+                        }
+                    }
                 }
             }
-            if (rainDays > mostDays) {
-                mostDays = rainDays;
-                bestID = gameID;
-                parentPort.postMessage({ bestID, mostDays });
-            }
-            //console.log("Game ID: " + gameID + " Rain Days: " + rainDays);
         }
-        parentPort.close();
+        );
+        worker.on('error', (err) => {
+            console.error("Worker error: ", err);
+        });
+        worker.on('exit', (code) => {
+            if (code !== 0)
+                console.error(`Worker stopped with exit code ${code}`);
+        });
     }
-} else if (typeof(importScripts) !== 'undefined') {
-    // Web Worker environment
-    let bestID = 0;
-    let mostDays = 0;
+}
+else {
+    // Worker thread
+    var save = workerData.save;
+    var startID = workerData.startID;
+    var endID = workerData.endID;
 
-    const { startID, endID } = workerData;
+    for (var id = startID; id >= endID; id -= 1) {
+        save.gameID = id;
+        var month = new Month();
+        for (var day = 1; day <= 28; day++) {
+            var currentDay = new Day();
 
-    for (let gameID = startID; gameID <= endID; gameID++) {
-        save.gameID = gameID;
-        var prediction = predictGreenRain(false, 0);
-        var rainDays = 0;
-        for (var i = 0; i < prediction.weathers.length; i++) {
-            if (prediction.weathers[i].weatherTown == 'Rain' || prediction.weathers[i].weatherTown == 'Green Rain' || prediction.weathers[i].weatherTown == 'Storm') {
-                rainDays++;
+            var weather = predictGreenRainForDay(day);
+            var event = predictEventForDay(day);
+            currentDay.day = day;
+            currentDay.weatherTown = weather;
+            currentDay.event = event;
+            month.days.push(currentDay);
+        }
+        // Count the number of rainy days in the month
+        var rainyDays = month.days.filter(d => d.weatherTown === 'Rain' || d.weatherTown === 'Green Rain' || d.weatherTown === 'Storm').length;
+
+        parentPort.postMessage({ type: 'best', data: { id: id, rainyDays: rainyDays } });
+
+        if (rainyDays >= 13) {
+            // Check for at least 2 Fairy events
+            for (var i = 0; i < month.days.length; i++) {
+                month.days[i].event = predictEventForDay(month.days[i].day);
+            }
+            var fairyDays = month.days.filter(d => d.event === 'Fairy').length;
+            if (fairyDays >= 2) {
+                parentPort.postMessage({ type: 'candidate', data: { id: id, rainyDays: rainyDays, fairyDays: fairyDays, month: month } });
             }
         }
-        if (rainDays > mostDays) {
-            mostDays = rainDays;
-            bestID = gameID;
-            postMessage({ bestID, mostDays });
-        }
-        //console.log("Game ID: " + gameID + " Rain Days: " + rainDays);
     }
-    close();
+    parentPort.postMessage({ type: 'done' });
 }
