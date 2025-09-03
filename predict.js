@@ -1,5 +1,7 @@
+const { Console } = require('console');
 var CSRandom = require('./cs-random.js');
 var XXH = require('./xxhash.min.js');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 
 // These helper functions mimic the RNG wrappers of Stardew 1.6
 function getRandomSeed(a, b = 0, c = 0, d = 0, e = 0) {
@@ -126,6 +128,8 @@ function predictEventForDay(day) {
         year,
         rng;
 
+    thisEvent = '(No event)';
+
     month = Math.floor(offset / 28);
     monthName = save.seasonNames[month % 4];
     year = 1 + Math.floor(offset / 112);
@@ -162,8 +166,6 @@ function predictEventForDay(day) {
             thisEvent = 'Stone Owl';
         } else if (rng.NextDouble() < 0.008 && year > 1) {
             thisEvent = 'Strange Capsule';
-        } else {
-            thisEvent = '(No event)';
         }
     }
 
@@ -173,137 +175,106 @@ function predictEventForDay(day) {
 
 
 
-/* var searchCandidates = [];
-var bestRainyDays = 0;
-var bestRainyID = 0;
-
-for (id = 999999999; id >= 0; id -= 1) {
-    save.gameID = id;
-    var month = new Month();
-    for (var day = 1; day <= 28; day++) {
-        var currentDay = new Day();
-
-        var weather = predictGreenRainForDay(day);
-        var event = predictEventForDay(day);
-        currentDay.day = day;
-        currentDay.weatherTown = weather;
-        currentDay.event = event;
-        month.days.push(currentDay);
-    }
-    // Count the number of rainy days in the month
-    var rainyDays = month.days.filter(d => d.weatherTown === 'Rain' || d.weatherTown === 'Green Rain' || d.weatherTown === 'Storm').length;
-
-    if (rainyDays > bestRainyDays) {
-        bestRainyDays = rainyDays;
-        bestRainyID = id;
-        console.log("New best: " + bestRainyDays + " rainy days with ID " + bestRainyID);
-    }
-
-    if (rainyDays >= 16) {
-        // Check for at least 2 Fairy events
-        for (var i = 0; i < month.days.length; i++) {
-            month.days[i].event = predictEventForDay(month.days[i].day);
-        }
-        var fairyDays = month.days.filter(d => d.event === 'Fairy').length;
-        console.log(fairyDays)
-        if (fairyDays >= 2) {
-            searchCandidates.push({ id: id, rainyDays: rainyDays, fairyDays: fairyDays, month: month });
-            console.log("Found candidate ID " + id + " with " + rainyDays + " rainy days and " + fairyDays + " Fairy events.");
-        }
-    }
-}  */
-
-// Refactor loop as worker threads to speed up search
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
-
 if (isMainThread) {
+    const numWorkers = 6; // Number of threads to use
+    const searchCandidates = [];
+    let bestRainyDays = 0;
+    let bestRainyID = 0;
+    let bestFairyDays = 0;
+    let bestFairyID = 0;
+    let bestCombinedScore = 0;
+    let bestCombinedID = 0;
+    let completedWorkers = 0;
 
-    var searchCandidates = [];
-    var bestRainyDays = 0;
-    var bestRainyID = 0;
-    var numWorkers = 12;
-    var rangePerWorker = Math.floor(1000000000 / numWorkers);
-    var completedWorkers = 0;
+    const rangeSize = Math.floor(1000000000 / numWorkers); // Divide the range into equal parts
 
-    console.log("Starting search with " + numWorkers + " workers...");
+    for (let i = 0; i < numWorkers; i++) {
+        const startID = 999999999 - i * rangeSize;
+        const endID = startID - rangeSize + 1;
 
-    for (var w = 0; w < numWorkers; w++) {
-        let startID = 999999999 - w * rangePerWorker;
-        let endID = startID - rangePerWorker + 1;
-        if (w === numWorkers - 1) {
-            endID = 0; // Ensure last worker goes to 0
-        }
-        const worker = new Worker(__filename, { workerData: { startID: startID, endID: endID, save: save } });
-        worker.on('message', (msg) => {
-            if (msg.type === 'candidate') {
-                searchCandidates.push(msg.data);
-                console.log("Found candidate ID " + msg.data.id + " with " + msg.data.rainyDays + " rainy days and " + msg.data.fairyDays + " Fairy events.");
-            } else if (msg.type === 'best') {
-                if (msg.data.rainyDays > bestRainyDays) {
-                    bestRainyDays = msg.data.rainyDays;
-                    bestRainyID = msg.data.id;
-                    console.log("New best: " + bestRainyDays + " rainy days with ID " + bestRainyID);
+        const worker = new Worker(__filename, {
+            workerData: {
+                startID,
+                endID,
+            }
+        });
+
+        worker.on('message', (message) => {
+            if (message.type === 'best') {
+                const { id, overallScore, rainyDays, fairyDays } = message.data;
+                searchCandidates.push({ id, overallScore, rainyDays, fairyDays });
+                if (rainyDays > bestRainyDays) {
+                    bestRainyDays = rainyDays;
+                    bestRainyID = id;
                 }
-            } else if (msg.type === 'done') {
-                completedWorkers++;
-                console.log("Worker completed. " + completedWorkers + "/" + numWorkers + " done.");
-                if (completedWorkers === numWorkers) {
-                    console.log("All workers complete.");
-                    console.log("Best ID found: " + bestRainyID + " with " + bestRainyDays + " rainy days.");
-                    console.log("Total candidates found: " + searchCandidates.length);
-                    for (var c = 0; c < searchCandidates.length; c++) {
-                        console.log("Candidate ID " + searchCandidates[c].id + ": " + searchCandidates[c].rainyDays + " rainy days, " + searchCandidates[c].fairyDays + " Fairy events.");
-                        for (var d = 0; d < searchCandidates[c].month.days.length; d++) {
-                            console.log("  Day " + searchCandidates[c].month.days[d].day + ": " + searchCandidates[c].month.days[d].weatherTown + ", " + searchCandidates[c].month.days[d].event);
-                        }
-                    }
+                if (fairyDays > bestFairyDays) {
+                    bestFairyDays = fairyDays;
+                    bestFairyID = id;
+                }
+                if (overallScore > bestCombinedScore) {
+                    bestCombinedScore = overallScore;
+                    bestCombinedID = id;
+                    console.log(`New Best Combined Score: ${bestCombinedScore} (ID: ${bestCombinedID}, Rainy Days: ${rainyDays}, Fairy Days: ${fairyDays})`);
                 }
             }
-        }
-        );
-        worker.on('error', (err) => {
-            console.error("Worker error: ", err);
         });
-        worker.on('exit', (code) => {
-            if (code !== 0)
-                console.error(`Worker stopped with exit code ${code}`);
+
+
+
+        worker.on('exit', () => {
+            completedWorkers++;
+            if (completedWorkers === numWorkers) {
+                console.log('Search complete.');
+                console.log('Best Rainy Days:', bestRainyDays, 'Best ID:', bestRainyID);
+                console.log('Search Candidates:', searchCandidates);
+            }
         });
     }
-}
-else {
-    // Worker thread
-    var save = workerData.save;
-    var startID = workerData.startID;
-    var endID = workerData.endID;
+} else {
+    const { startID, endID } = workerData;
+    const searchCandidates = [];
+    let bestRainyDays = 0;
+    let bestRainyID = 0;
+    let bestFairyDays = 0;
+    let bestFairyID = 0;
+    let bestCombinedScore = 0;
+    let bestCombinedID = 0;
 
-    for (var id = startID; id >= endID; id -= 1) {
+    for (let id = startID; id >= endID; id--) {
         save.gameID = id;
-        var month = new Month();
-        for (var day = 1; day <= 28; day++) {
-            var currentDay = new Day();
+        const month = new Month();
+        for (let day = 1; day <= 28; day++) {
+            const currentDay = new Day();
 
-            var weather = predictGreenRainForDay(day);
-            var event = predictEventForDay(day);
+            const weather = predictGreenRainForDay(day);
+            const event = predictEventForDay(day);
             currentDay.day = day;
             currentDay.weatherTown = weather;
             currentDay.event = event;
             month.days.push(currentDay);
         }
-        // Count the number of rainy days in the month
-        var rainyDays = month.days.filter(d => d.weatherTown === 'Rain' || d.weatherTown === 'Green Rain' || d.weatherTown === 'Storm').length;
 
-        parentPort.postMessage({ type: 'best', data: { id: id, rainyDays: rainyDays } });
+        const rainyDays = month.days.filter(d => d.weatherTown === 'Rain' || d.weatherTown === 'Green Rain' || d.weatherTown === 'Storm').length;
 
-        if (rainyDays >= 13) {
-            // Check for at least 2 Fairy events
-            for (var i = 0; i < month.days.length; i++) {
+            for (let i = 0; i < month.days.length; i++) {
                 month.days[i].event = predictEventForDay(month.days[i].day);
             }
-            var fairyDays = month.days.filter(d => d.event === 'Fairy').length;
-            if (fairyDays >= 2) {
-                parentPort.postMessage({ type: 'candidate', data: { id: id, rainyDays: rainyDays, fairyDays: fairyDays, month: month } });
-            }
+
+        const fairyDays = month.days.filter(d => d.event === 'Fairy').length;
+        const combinedScore = rainyDays + fairyDays;
+        if (rainyDays > bestRainyDays) {
+            bestRainyDays = rainyDays;
+            bestRainyID = id;
         }
-    }
-    parentPort.postMessage({ type: 'done' });
+        if (fairyDays > bestFairyDays) {
+            bestFairyDays = fairyDays;
+            bestFairyID = id;
+        }
+        if (combinedScore > bestCombinedScore) {
+            bestCombinedScore = combinedScore;
+            bestCombinedID = id;
+            parentPort.postMessage({ type: 'best', data: { id: bestCombinedID, overallScore: bestCombinedScore, rainyDays, fairyDays } });
+        }
+}
+process.exit();
 }
